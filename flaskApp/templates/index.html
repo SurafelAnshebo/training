@@ -1,0 +1,1217 @@
+{% extends "base.html" %}
+
+{% block title %}BVLOS Flight Training Simulator{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endblock %}
+
+{% block body %}
+<!-- ============================================================ SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="logo">
+    <div>
+      <div class="title">BVLOS Simulator</div>
+      <div class="subtitle">Flight Training</div>
+    </div>
+  </div>
+
+  <div class="sidebar-body">
+
+    <!-- Session info -->
+    <div class="card" id="sessionCard">
+      <div class="card-title">Session</div>
+      <div id="sessionInfo" style="font-size:.8rem; color:var(--text-dim);">Not connected</div>
+      <div style="margin-top:8px;">
+        <button class="btn btn-primary btn-block" id="btnStartSession">Start Session</button>
+      </div>
+    </div>
+
+    <!-- Flight controls -->
+    <div class="card">
+      <div class="card-title">Flight Controls</div>
+
+      <!-- Speed selector -->
+      <div style="margin-bottom:10px;">
+        <label style="font-size:.7rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:.05em; display:block; margin-bottom:4px;">
+          Cruise Speed
+        </label>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <input type="range" id="speedSlider" min="50" max="80" step="5" value="50"
+            style="flex:1; cursor:pointer; accent-color:var(--accent);">
+          <span id="speedLabel"
+            style="min-width:54px; text-align:right; font-size:.9rem; font-weight:700;
+                   color:var(--accent); font-variant-numeric:tabular-nums;">50 m/s</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:.65rem; color:var(--text-dim); margin-top:2px;">
+          <span>50 m/s</span><span>65 m/s</span><span>80 m/s</span>
+        </div>
+      </div>
+
+      <div class="btn-grid">
+        <button class="btn btn-success" id="btnLaunch"  disabled>Launch</button>
+        <button class="btn btn-warning" id="btnHover"   disabled>Hover</button>
+        <button class="btn btn-primary" id="btnResume"  disabled>Resume</button>
+        <button class="btn btn-danger"  id="btnLand"    disabled>Land</button>
+        <button class="btn btn-neutral" id="btnRTL"     disabled
+                style="background:rgba(245,158,11,.15); border-color:rgba(245,158,11,.5); color:#fbbf24;">
+          ⟲ RTL
+        </button>
+        <button class="btn btn-neutral" id="btnSave"    disabled>Save WPs</button>
+        <button class="btn btn-neutral" id="btnClear"   disabled>Clear Map</button>
+      </div>
+    </div>
+
+    <!-- Telemetry -->
+    <div class="card">
+      <div class="card-title">Telemetry</div>
+      <div class="status-grid">
+        <div class="stat">
+          <div class="stat-label">Altitude</div>
+          <div class="stat-value" id="tAlt">— m</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Speed</div>
+          <div class="stat-value" id="tSpeed">— m/s</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Heading</div>
+          <div class="stat-value" id="tHeading">—°</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">V-Rate</div>
+          <div class="stat-value" id="tVrate">— m/s</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Battery</div>
+          <div class="stat-value" id="tBattery">—%</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Voltage</div>
+          <div class="stat-value" id="tVoltage">— V</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">GPS Fix</div>
+          <div class="stat-value" id="tGPS">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Mode</div>
+          <div class="stat-value" id="tMode">—</div>
+        </div>
+        <div class="stat" style="grid-column:1/-1;">
+          <div class="stat-label">Position</div>
+          <div class="stat-value" id="tPos" style="font-size:.72rem;">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Pitch</div>
+          <div class="stat-value" id="tPitch">—°</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Roll</div>
+          <div class="stat-value" id="tRoll">—°</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Waypoints -->
+    <div class="card">
+      <div class="card-title">Waypoints</div>
+      <div id="wpList" style="font-size:.78rem; color:var(--text-dim); max-height:140px; overflow-y:auto;">
+        No waypoints yet. Click the map to add.
+      </div>
+    </div>
+
+    <!-- Active scenarios -->
+    <div class="card" id="scenarioCard" style="display:none;">
+      <div class="card-title" style="color:var(--accent-r);">⚠ Active Scenarios</div>
+      <div class="scenario-list" id="scenarioList"></div>
+    </div>
+
+    <!-- Debrief (shown after mission complete) -->
+    <div class="card" id="debriefCard" style="display:none;">
+      <div class="card-title">Debrief</div>
+      <div id="debriefContent"></div>
+      <button class="btn btn-primary btn-block" style="margin-top:10px;" id="btnReplay">Replay Flight</button>
+    </div>
+
+  </div><!-- sidebar-body -->
+</aside>
+
+<!-- ============================================================ MAP -->
+<main class="main-content">
+  <div id="map"></div>
+
+  <!-- TCAS proximity alert strip (above the map) -->
+  <div id="tcasStrip" style="display:none; position:absolute; top:10px; left:50%; transform:translateX(-50%);
+       z-index:500; display:none; flex-direction:column; gap:4px; align-items:center; min-width:320px;"></div>
+
+  <!-- Crash overlay -->
+  <div id="crashOverlay" style="display:none; position:absolute; inset:0; z-index:600;
+       background:rgba(120,0,0,.82); backdrop-filter:blur(3px);
+       display:none; flex-direction:column; align-items:center; justify-content:center; gap:12px; text-align:center;">
+    <div style="font-size:3.5rem;">💥</div>
+    <div style="font-size:1.6rem; font-weight:900; color:#fff; letter-spacing:.02em;">AIRCRAFT LOST</div>
+    <div style="font-size:1rem; color:rgba(255,255,255,.8);" id="crashSubtitle">Mid-Air Collision</div>
+    <div style="font-size:.8rem; color:rgba(255,255,255,.6); margin-top:4px;" id="crashDetail"></div>
+    <button class="btn btn-danger" style="margin-top:16px; padding:12px 32px; font-size:.95rem;"
+            onclick="location.reload()">Reset &amp; Start Over</button>
+  </div>
+
+  <div class="mission-banner" id="missionBanner">
+    <div style="font-size:.8rem; color:var(--text-dim); margin-bottom:4px;">MISSION COMPLETE</div>
+    <div class="score-big" id="bannerScore">—</div>
+    <div class="grade" id="bannerGrade">—</div>
+    <button class="btn btn-primary btn-sm" style="margin-top:12px;" id="btnDebrief">View Full Debrief</button>
+  </div>
+
+  <!-- weather opacity -->
+  <div style="position:absolute; top:10px; right:50px; z-index:400; background:rgba(15,20,30,.8); padding:6px 10px; border-radius:6px; display:flex; align-items:center; gap:8px;">
+    <span style="font-size:.7rem; color:#94a3b8;">Weather</span>
+    <input type="range" min="0" max="1" step="0.05" value="0.5" id="weatherSlider" style="width:80px; cursor:pointer;">
+  </div>
+
+  <div class="status-bar">
+    <span id="sbLatLon">Hover over map for coordinates</span>
+    <span id="sbDist"></span>
+    <span id="sbWpState"></span>
+  </div>
+</main>
+
+<!-- ============================================================ START SESSION MODAL -->
+<!-- ============================================================ MISSION BRIEFING MODAL (3 steps) -->
+<div class="modal-backdrop" id="modalSession">
+  <div class="modal" id="briefingModal" style="width:640px; max-width:98vw; max-height:92vh; overflow-y:auto; padding:0;">
+
+    <!-- Step 1: Name -->
+    <div id="step1" class="brief-step" style="padding:28px;">
+      <div style="text-align:center; margin-bottom:24px;">
+        <div style="font-size:2rem; margin-bottom:6px;">🛩</div>
+        <div style="font-size:1.3rem; font-weight:800; color:#fff;">BVLOS Flight Training</div>
+        <div style="font-size:.85rem; color:var(--text-dim); margin-top:4px;">Operated by ADDA — African Drone and Data Academy</div>
+      </div>
+      <label>Trainee Name</label>
+      <input type="text" id="inputName" placeholder="First Last" autocomplete="off"
+             style="font-size:1rem; padding:10px 14px;">
+      <div style="margin-top:6px; font-size:.75rem; color:var(--text-dim);">
+        Your name is used to track mission progress and scores.
+      </div>
+      <div class="modal-actions" style="margin-top:20px;">
+        <button class="btn btn-primary" id="btnToStep2" style="width:100%; padding:12px; font-size:.95rem;">
+          Select Mission →
+        </button>
+      </div>
+    </div>
+
+    <!-- Step 2: Mission select -->
+    <div id="step2" class="brief-step" style="display:none; padding:28px;">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
+        <button class="btn btn-neutral btn-sm" id="btnBackTo1">← Back</button>
+        <div>
+          <div style="font-weight:700; font-size:1rem;" id="s2TraineeName">—</div>
+          <div style="font-size:.75rem; color:var(--text-dim);">Select your mission</div>
+        </div>
+      </div>
+      <div id="missionGrid" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;"></div>
+    </div>
+
+    <!-- Step 3: Full briefing -->
+    <div id="step3" class="brief-step" style="display:none;">
+      <!-- Coloured header bar -->
+      <div id="briefHeader" style="padding:20px 24px 16px; border-radius:10px 10px 0 0;">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <div>
+            <div id="briefTitle"   style="font-size:1.2rem; font-weight:900; color:#fff;"></div>
+            <div id="briefSubtitle" style="font-size:.8rem;  color:rgba(255,255,255,.8);"></div>
+          </div>
+          <div id="briefDiff" style="background:rgba(0,0,0,.25); border-radius:20px; padding:4px 12px; font-size:.75rem; font-weight:700; color:#fff;"></div>
+        </div>
+      </div>
+
+      <div style="padding:20px 24px;">
+
+        <!-- Narrative -->
+        <div style="background:var(--bg-dark); border-radius:6px; padding:14px; margin-bottom:16px; font-size:.85rem; line-height:1.6; color:var(--text-dim); border-left:3px solid var(--accent);">
+          <div style="font-size:.65rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:6px;">Scenario</div>
+          <div id="briefNarrative"></div>
+        </div>
+
+        <!-- Objectives -->
+        <div style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:8px;">Mission Objectives</div>
+          <div id="briefObjectives"></div>
+        </div>
+
+        <!-- Weather + NOTAMs side by side -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
+          <div style="background:var(--bg-dark); border-radius:6px; padding:12px;">
+            <div class="card-title" style="margin-bottom:8px;">🌤 Weather</div>
+            <div id="briefWeather" style="font-size:.78rem; color:var(--text-dim); line-height:1.8;"></div>
+          </div>
+          <div style="background:var(--bg-dark); border-radius:6px; padding:12px;">
+            <div class="card-title" style="margin-bottom:8px;">📋 NOTAMs</div>
+            <div id="briefNotams" style="font-size:.78rem; color:var(--text-dim); line-height:1.8;"></div>
+          </div>
+        </div>
+
+        <!-- Pre-flight checklist -->
+        <div style="background:var(--bg-dark); border-radius:6px; padding:14px; margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:10px;">✅ Pre-Flight Checklist</div>
+          <div style="font-size:.75rem; color:var(--text-dim); margin-bottom:10px;">
+            You must acknowledge every item before you can launch.
+          </div>
+          <div id="briefChecklist"></div>
+        </div>
+
+        <!-- Pass score notice -->
+        <div id="briefPassScore" style="font-size:.78rem; color:var(--text-dim); margin-bottom:16px; text-align:center;"></div>
+
+        <div style="display:flex; gap:10px;">
+          <button class="btn btn-neutral" id="btnBackTo2" style="flex:1;">← Back</button>
+          <button class="btn btn-success" id="btnLaunchMission" disabled
+                  style="flex:2; padding:12px; font-size:.95rem; font-weight:800;">
+            🚀 Launch Mission
+          </button>
+        </div>
+      </div>
+    </div><!-- step3 -->
+
+  </div>
+</div>
+
+<!-- ============================================================ DEBRIEF MODAL -->
+<div class="modal-backdrop" id="modalDebrief">
+  <div class="modal" style="width:560px; max-height:90vh; overflow-y:auto;">
+    <h3>Flight Debrief</h3>
+    <div id="fullDebriefContent"></div>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-neutral" id="btnCloseDebrief">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Config (injected from Flask)
+// ============================================================
+const HOME_LAT     = {{ home_lat }};
+const HOME_LON     = {{ home_lon }};
+const LANDING_LAT  = {{ landing_lat }};
+const LANDING_LON  = {{ landing_lon }};
+
+// ============================================================
+// State
+// ============================================================
+let sessionId = sessionStorage.getItem("bvlos_session_id");
+let socket = io();
+let map, droneMarker, polyline, weatherOverlay;
+let waypoints = [];          // [{lat, lng, altitude}]
+let waypointsLocked = false;
+let wpMarkers = [];
+let replayLog = null;
+let trafficMarkers = {};     // callsign → Leaflet marker
+let selectedMission = null;
+let traineeName = "";
+let curriculum = [];
+
+// ============================================================
+// Map setup
+// ============================================================
+function initMap() {
+  map = L.map("map").setView([HOME_LAT, HOME_LON], 11);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 18, attribution: "© OpenStreetMap"
+  }).addTo(map);
+
+  polyline = L.polyline([], { color: "#3b82f6", weight: 2.5, dashArray: "6 4" }).addTo(map);
+
+  // Markers: home (H) and landing (L)
+  map.addLayer(makeFixedMarker([HOME_LAT, HOME_LON], "H", "#22c55e", "Takeoff (Home)"));
+  map.addLayer(makeFixedMarker([LANDING_LAT, LANDING_LON], "L", "#ef4444", "Landing Zone"));
+
+  // Weather overlay (animated drift)
+  const wBounds = L.latLngBounds([[20.0, -129.5],[41.0, -75.5]]);
+  weatherOverlay = L.imageOverlay("/static/weather.png", wBounds, { opacity: 0.5 }).addTo(map);
+  animateWeather(weatherOverlay, wBounds);
+
+  document.getElementById("weatherSlider").oninput = e =>
+    weatherOverlay.setOpacity(parseFloat(e.target.value));
+
+  // Airport GeoJSON
+  fetch("/static/Airport.geojson").then(r => r.json()).then(data => {
+    L.geoJSON(data, {
+      onEachFeature(feature, layer) {
+        if (feature.properties?.name) layer.bindPopup(feature.properties.name);
+      }
+    }).addTo(map);
+  }).catch(() => {});
+
+  // TFR circle (Mercedes-Benz Stadium)
+  L.circle([33.888087, -84.463577], {
+    radius: 2.2 * 1852, color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.15, weight: 2
+  }).bindTooltip("TFR: Game in Progress — 3 NM radius", { permanent: false }).addTo(map);
+
+  // Map click → add waypoint
+  map.on("click", onMapClick);
+
+  // During zoom Leaflet updates the marker's CSS transform to new pixel coords.
+  // The 0.45s position transition would animate that pixel jump, making the
+  // aircraft appear to fly. Freeze the transition for the duration of the zoom.
+  map.on("zoomstart", () => {
+    if (droneMarker) {
+      const el = droneMarker.getElement();
+      if (el) el.style.transition = "none";
+    }
+    _freezeTrafficTransitions(true);
+  });
+  map.on("zoomend", () => {
+    if (droneMarker) {
+      const el = droneMarker.getElement();
+      if (el) requestAnimationFrame(() => { el.style.transition = "transform 0.45s linear"; });
+    }
+    requestAnimationFrame(() => _freezeTrafficTransitions(false));
+  });
+
+  // Cursor coordinate display
+  map.on("mousemove", e => {
+    document.getElementById("sbLatLon").textContent =
+      `Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
+  });
+}
+
+function makeFixedMarker(latlng, label, color, popup) {
+  const icon = L.divIcon({
+    html: `<div style="background:${color};color:#fff;width:24px;height:24px;border-radius:50%;
+                       display:flex;align-items:center;justify-content:center;
+                       font-weight:800;font-size:12px;border:2px solid rgba(255,255,255,.6);">${label}</div>`,
+    className: "", iconSize: [24,24], iconAnchor: [12,12]
+  });
+  return L.marker(latlng, { icon, draggable: false }).bindPopup(popup);
+}
+
+function animateWeather(overlay, baseBounds) {
+  const steps = 4000, fps = 20;
+  let t = 0;
+  setInterval(() => {
+    t = (t + 1) % steps;
+    const frac = t / steps;
+    const sw = baseBounds.getSouthWest(), ne = baseBounds.getNorthEast();
+    overlay.setBounds(L.latLngBounds(
+      [[sw.lat, sw.lng + 0.6 * frac],[ne.lat, ne.lng + 0.6 * frac]]
+    ));
+  }, 1000 / fps);
+}
+
+// ============================================================
+// Waypoint management
+// ============================================================
+function onMapClick(e) {
+  if (waypointsLocked) return;
+  addWaypoint({ lat: e.latlng.lat, lng: e.latlng.lng, altitude: 0 });
+}
+
+function addWaypoint(wp, skipPolyline) {
+  const idx = waypoints.length;
+  waypoints.push(wp);
+
+  const marker = L.marker([wp.lat, wp.lng], {
+    icon: numberedIcon(idx + 1),
+    draggable: true
+  }).addTo(map);
+
+  marker.on("dragend", ev => {
+    const pos = ev.target.getLatLng();
+    waypoints[idx].lat = pos.lat;
+    waypoints[idx].lng = pos.lng;
+    updatePolyline();
+    updateWpList();
+  });
+
+  // Click marker to edit altitude
+  const popupContent = () => `
+    <div class="wp-popup-form">
+      <label>Altitude (m AGL)</label>
+      <input type="number" id="popAlt" value="${wp.altitude || 0}" min="0" max="120">
+      <button onclick="setWpAlt(${idx})">Set Altitude</button>
+    </div>`;
+  marker.bindPopup(popupContent).on("click", () => setTimeout(() => marker.openPopup(), 50));
+
+  wpMarkers.push(marker);
+  if (!skipPolyline) {
+    updatePolyline();
+    updateWpList();
+  }
+}
+
+window.setWpAlt = function(idx) {
+  const val = parseFloat(document.getElementById("popAlt").value) || 0;
+  waypoints[idx].altitude = val;
+  updateWpList();
+  map.closePopup();
+};
+
+function numberedIcon(n) {
+  return L.divIcon({
+    html: `<div style="background:#3b82f6;color:#fff;width:24px;height:24px;border-radius:50%;
+                       display:flex;align-items:center;justify-content:center;
+                       font-weight:700;font-size:11px;border:2px solid rgba(255,255,255,.5);">${n}</div>`,
+    className: "", iconSize: [24,24], iconAnchor: [12,12]
+  });
+}
+
+function updatePolyline() {
+  const all = [{ lat: HOME_LAT, lng: HOME_LON }, ...waypoints,
+               { lat: LANDING_LAT, lng: LANDING_LON }];
+  polyline.setLatLngs(all.map(p => [p.lat, p.lng]));
+
+  let total = 0;
+  for (let i = 0; i < all.length - 1; i++) {
+    total += haversine(all[i].lat, all[i].lng, all[i+1].lat, all[i+1].lng);
+  }
+  document.getElementById("sbDist").textContent = `Total: ${(total/1000).toFixed(2)} km`;
+}
+
+function updateWpList() {
+  const el = document.getElementById("wpList");
+  if (!waypoints.length) {
+    el.textContent = "No waypoints yet. Click the map to add.";
+    return;
+  }
+  el.innerHTML = waypoints.map((wp, i) =>
+    `<div style="padding:3px 0; border-bottom:1px solid var(--border);">
+       <b>WP ${i+1}</b> ${wp.lat.toFixed(4)}, ${wp.lng.toFixed(4)}
+       <span style="float:right; color:var(--accent-y);">${wp.altitude || 0} m</span>
+     </div>`
+  ).join("");
+}
+
+function clearMap() {
+  wpMarkers.forEach(m => map.removeLayer(m));
+  wpMarkers = [];
+  waypoints = [];
+  waypointsLocked = false;
+  polyline.setLatLngs([]);
+  updateWpList();
+  document.getElementById("sbDist").textContent = "";
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+  const dp = (lat2 - lat1) * Math.PI / 180, dl = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ============================================================
+// Curriculum + Progress
+// ============================================================
+async function loadCurriculum() {
+  if (curriculum.length) return;
+  const res = await fetch("/api/curriculum");
+  curriculum = (await res.json()).missions || [];
+}
+
+function getProgress() {
+  try { return JSON.parse(localStorage.getItem("bvlos_progress") || "{}"); }
+  catch(e) { return {}; }
+}
+
+function saveScore(name, missionId, score, grade, passScore) {
+  const all = getProgress();
+  if (!all[name]) all[name] = {};
+  const prev = all[name][missionId];
+  if (!prev || score > prev.score) {
+    all[name][missionId] = { score, grade, passed: score >= passScore };
+  }
+  localStorage.setItem("bvlos_progress", JSON.stringify(all));
+}
+
+function isMissionUnlocked(mission, progress, name) {
+  if (mission.level === 1) return true;
+  const prev = curriculum.find(m => m.level === mission.level - 1);
+  return !!(prev && (progress[name] || {})[prev.id]?.passed);
+}
+
+// ============================================================
+// 3-Step Session Modal
+// ============================================================
+function goToStep(n) {
+  [1, 2, 3].forEach(i =>
+    document.getElementById(`step${i}`).style.display = i === n ? "" : "none"
+  );
+}
+
+function openSessionModal() {
+  document.getElementById("modalSession").classList.add("open");
+  goToStep(1);
+  const saved = localStorage.getItem("bvlos_last_name") || "";
+  if (saved) document.getElementById("inputName").value = saved;
+}
+function closeSessionModal() {
+  document.getElementById("modalSession").classList.remove("open");
+}
+
+// Backdrop click dismisses the modal so the student can plan their route first
+document.getElementById("modalSession").addEventListener("click", e => {
+  if (e.target === document.getElementById("modalSession")) closeSessionModal();
+});
+
+document.getElementById("btnStartSession").onclick = openSessionModal;
+
+// Step 1 → 2: validate name, load curriculum, render mission grid
+document.getElementById("btnToStep2").onclick = async () => {
+  const name = document.getElementById("inputName").value.trim();
+  if (!name) { document.getElementById("inputName").focus(); return; }
+  traineeName = name;
+  localStorage.setItem("bvlos_last_name", name);
+  document.getElementById("s2TraineeName").textContent = name;
+  try {
+    await loadCurriculum();
+    renderMissionGrid();
+    goToStep(2);
+  } catch(e) { alert("Failed to load missions: " + e.message); }
+};
+
+document.getElementById("btnBackTo1").onclick = () => goToStep(1);
+document.getElementById("btnBackTo2").onclick = () => goToStep(2);
+
+function renderMissionGrid() {
+  const grid = document.getElementById("missionGrid");
+  const progress = getProgress();
+  grid.innerHTML = "";
+  curriculum.forEach(m => {
+    const unlocked = isMissionUnlocked(m, progress, traineeName);
+    const rec = (progress[traineeName] || {})[m.id];
+    const card = document.createElement("div");
+    card.style.cssText = [
+      "background:var(--bg-dark)",
+      `border:2px solid ${unlocked ? m.color : "var(--border)"}`,
+      "border-radius:8px", "padding:12px",
+      `cursor:${unlocked ? "pointer" : "default"}`,
+      `opacity:${unlocked ? "1" : "0.4"}`,
+      "transition:transform .15s"
+    ].join(";");
+    if (unlocked) {
+      card.onmouseenter = () => card.style.transform = "translateY(-2px)";
+      card.onmouseleave = () => card.style.transform = "";
+    }
+    const recBadge = rec
+      ? `<span style="font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:20px;
+           background:${rec.passed ? "#22c55e22" : "#ef444422"};
+           color:${rec.passed ? "#22c55e" : "#ef4444"};">
+           ${rec.passed ? "✓" : "✗"} ${rec.score}</span>`
+      : (unlocked ? "" : `<span style="font-size:.8rem;">🔒</span>`);
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+        <div style="font-size:.65rem;font-weight:700;color:${m.color};text-transform:uppercase;letter-spacing:.06em;">${m.title}</div>
+        ${recBadge}
+      </div>
+      <div style="font-weight:700;font-size:.85rem;color:#fff;margin-bottom:8px;">${m.subtitle}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:20px;
+          background:${m.color}22;color:${m.color};border:1px solid ${m.color}44;">${m.difficulty}</span>
+        <span style="font-size:.65rem;color:var(--text-dim);">~${m.duration_est}</span>
+      </div>`;
+    if (unlocked) card.onclick = () => showBriefing(m);
+    grid.appendChild(card);
+  });
+}
+
+function showBriefing(mission) {
+  selectedMission = mission;
+  const hdr = document.getElementById("briefHeader");
+  hdr.style.background = `linear-gradient(135deg,${mission.color}bb,${mission.color}33)`;
+  document.getElementById("briefTitle").textContent    = `${mission.title}: ${mission.subtitle}`;
+  document.getElementById("briefSubtitle").textContent = `Level ${mission.level} · ~${mission.duration_est}`;
+  document.getElementById("briefDiff").textContent     = mission.difficulty;
+  document.getElementById("briefNarrative").textContent = mission.narrative;
+  document.getElementById("briefObjectives").innerHTML = mission.objectives.map(o =>
+    `<div style="display:flex;gap:8px;margin-bottom:6px;font-size:.82rem;color:var(--text-dim);">
+       <span style="color:${mission.color};flex-shrink:0;">▸</span><span>${o}</span></div>`
+  ).join("");
+  document.getElementById("briefWeather").innerHTML = Object.entries(mission.weather).map(([k, v]) =>
+    `<div><b style="color:#94a3b8;text-transform:capitalize;">${k.replace(/_/g," ")}:</b> ${v}</div>`
+  ).join("");
+  document.getElementById("briefNotams").innerHTML = mission.notams.map(n =>
+    `<div style="margin-bottom:4px;">• ${n}</div>`
+  ).join("");
+  document.getElementById("briefPassScore").innerHTML =
+    `Pass score: <b style="color:${mission.color};">${mission.pass_score}/100</b>
+     &nbsp;·&nbsp; Scores saved automatically. Missions unlock progressively on pass.`;
+  renderChecklist(mission.checklist);
+  goToStep(3);
+}
+
+function renderChecklist(items) {
+  const c = document.getElementById("briefChecklist");
+  c.innerHTML = "";
+  items.forEach(item => {
+    const lbl = document.createElement("label");
+    lbl.style.cssText = "display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;font-size:.82rem;color:var(--text-dim);";
+    const cb = document.createElement("input");
+    Object.assign(cb, { type: "checkbox" });
+    cb.style.cssText = "margin-top:2px;width:15px;height:15px;cursor:pointer;accent-color:var(--accent-g);";
+    cb.onchange = syncLaunchBtn;
+    const span = document.createElement("span");
+    span.textContent = item;
+    lbl.append(cb, span);
+    c.appendChild(lbl);
+  });
+  syncLaunchBtn();
+}
+
+function syncLaunchBtn() {
+  const boxes = [...document.querySelectorAll("#briefChecklist input[type=checkbox]")];
+  document.getElementById("btnLaunchMission").disabled =
+    !boxes.length || !boxes.every(b => b.checked);
+}
+
+// No-waypoints inline warning shown inside step 3 (avoids janky alert())
+function showNoWaypointsMsg(show) {
+  let msg = document.getElementById("noWpMsg");
+  if (!msg && show) {
+    msg = document.createElement("div");
+    msg.id = "noWpMsg";
+    msg.style.cssText = "font-size:.8rem;color:var(--accent-y);text-align:center;padding:8px 12px;margin-bottom:10px;background:rgba(245,158,11,.12);border-radius:6px;border:1px solid rgba(245,158,11,.3);";
+    msg.innerHTML = `⚠&nbsp; No route drawn yet.&nbsp;
+      <a href="#" id="dismissForMap" style="color:var(--accent);">Close this window</a>
+      and click the map to add waypoints, then re-open to launch.`;
+    document.getElementById("briefPassScore").after(msg);
+    document.getElementById("dismissForMap").onclick = e => { e.preventDefault(); closeSessionModal(); };
+  }
+  if (msg) msg.style.display = show ? "" : "none";
+}
+
+// Launch Mission — create session + launch full route + join socket room
+document.getElementById("btnLaunchMission").onclick = async () => {
+  if (!traineeName || !selectedMission) return;
+  if (!waypoints.length) { showNoWaypointsMsg(true); return; }
+  showNoWaypointsMsg(false);
+
+  const btn = document.getElementById("btnLaunchMission");
+  btn.disabled = true;
+  btn.textContent = "Launching…";
+
+  try {
+    // 1. Create session
+    const sRes = await fetch("/api/session", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trainee_name: traineeName })
+    });
+    const sData = await sRes.json();
+    if (!sRes.ok) throw new Error(sData.error);
+    sessionId = sData.session_id;
+    sessionStorage.setItem("bvlos_session_id", sessionId);
+
+    // 2. Launch — waypoints + mission events are handled server-side
+    const full = [...waypoints, { lat: LANDING_LAT, lng: LANDING_LON, altitude: 0 }];
+    const speed = parseInt(document.getElementById("speedSlider").value, 10);
+    const lRes = await fetch(`/api/session/${sessionId}/launch`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coordinates: full, speed_ms: speed, mission_id: selectedMission.id })
+    });
+    const lData = await lRes.json();
+    if (!lRes.ok) throw new Error(lData.error);
+
+    // 3. Lock map + update UI
+    waypointsLocked = true;
+    wpMarkers.forEach(m => m.dragging.disable());
+    map.off("click", onMapClick);
+    onSessionCreated(traineeName, sessionId);
+    document.getElementById("sbWpState").textContent =
+      `${selectedMission.title} active · ${lData.cruise_speed_ms} m/s`;
+    closeSessionModal();
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = "🚀 Launch Mission";
+    alert("Launch failed: " + e.message);
+  }
+};
+
+function onSessionCreated(name, sid) {
+  const mLine = selectedMission
+    ? `<div style="font-size:.7rem;color:${selectedMission.color};margin-top:3px;">
+         ${selectedMission.title}: ${selectedMission.subtitle}</div>`
+    : "";
+  document.getElementById("sessionInfo").innerHTML =
+    `<b>${name}</b><br><span style="font-family:monospace;font-size:.72rem;">${sid}</span>${mLine}`;
+  document.getElementById("btnStartSession").textContent = "New Session";
+  enableControls(true);
+  socket.emit("join_session", { session_id: sid });
+}
+
+function enableControls(on) {
+  ["btnLaunch","btnHover","btnResume","btnLand","btnRTL","btnSave","btnClear"].forEach(id =>
+    (document.getElementById(id).disabled = !on)
+  );
+}
+
+// Reconnect on page reload — re-join telemetry room without going through the modal
+if (sessionId) {
+  fetch(`/api/session/${sessionId}/telemetry`).then(r => {
+    if (r.ok) {
+      document.getElementById("sessionInfo").innerHTML =
+        `<b>Reconnected</b><br><span style="font-family:monospace;font-size:.72rem;">${sessionId}</span>`;
+      document.getElementById("btnStartSession").textContent = "New Session";
+      enableControls(true);
+      socket.emit("join_session", { session_id: sessionId });
+    }
+  }).catch(() => sessionStorage.removeItem("bvlos_session_id"));
+}
+
+// ============================================================
+// Mission controls
+// ============================================================
+document.getElementById("btnSave").onclick = async () => {
+  if (!sessionId || !waypoints.length) return alert("Add waypoints first.");
+  const full = [...waypoints, { lat: LANDING_LAT, lng: LANDING_LON, altitude: 0 }];
+  const res = await fetch(`/api/session/${sessionId}/waypoints`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coordinates: full })
+  });
+  if (res.ok) {
+    waypointsLocked = true;
+    wpMarkers.forEach(m => m.dragging.disable());
+    map.off("click", onMapClick);
+    document.getElementById("btnSave").disabled = true;
+    document.getElementById("sbWpState").textContent = "Waypoints saved ✓";
+    updatePolyline();
+  }
+};
+
+// Speed slider
+document.getElementById("speedSlider").oninput = function() {
+  document.getElementById("speedLabel").textContent = this.value + " m/s";
+};
+
+document.getElementById("btnLaunch").onclick = async () => {
+  if (!sessionId) return alert("Start a session first (use the Mission Briefing modal).");
+  if (!waypoints.length) return alert("Add waypoints to the map first.");
+  const full = [...waypoints, { lat: LANDING_LAT, lng: LANDING_LON, altitude: 0 }];
+  const speed = parseInt(document.getElementById("speedSlider").value, 10);
+  const res = await fetch(`/api/session/${sessionId}/launch`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coordinates: full, speed_ms: speed,
+                           mission_id: selectedMission ? selectedMission.id : null })
+  });
+  const data = await res.json();
+  if (!res.ok) return alert("Launch failed: " + data.error);
+  waypointsLocked = true;
+  wpMarkers.forEach(m => m.dragging.disable());
+  map.off("click", onMapClick);
+  document.getElementById("sbWpState").textContent =
+    `Mission active · ${data.cruise_speed_ms} m/s`;
+};
+
+document.getElementById("btnHover").onclick = () =>
+  sessionId && fetch(`/api/session/${sessionId}/hover`, { method: "POST" });
+
+document.getElementById("btnRTL").onclick = () => {
+  if (!sessionId) return;
+  fetch(`/api/session/${sessionId}/rtl`, { method: "POST" });
+  document.getElementById("sbWpState").textContent = "RTL — returning to launch point";
+};
+
+document.getElementById("btnResume").onclick = () =>
+  sessionId && fetch(`/api/session/${sessionId}/resume`, { method: "POST" });
+
+document.getElementById("btnLand").onclick = () =>
+  sessionId && fetch(`/api/session/${sessionId}/land`, { method: "POST" });
+
+document.getElementById("btnClear").onclick = () => {
+  if (waypointsLocked) return alert("Waypoints locked. Land or start a new session to clear.");
+  clearMap();
+};
+
+// ============================================================
+// Telemetry display
+// ============================================================
+const FIX_LABELS = { 0: "None", 1: "No Fix", 2: "2D Fix", 3: "3D Fix" };
+
+socket.on("telemetry", t => {
+  const f = (v, d=1) => v != null ? (+v).toFixed(d) : "—";
+  document.getElementById("tAlt").textContent     = f(t.alt) + " m";
+  document.getElementById("tSpeed").textContent   = f(t.groundspeed) + " m/s";
+  document.getElementById("tHeading").textContent = f(t.heading, 0) + "°";
+  document.getElementById("tVrate").textContent   = (t.vertical_rate >= 0 ? "+" : "") + f(t.vertical_rate) + " m/s";
+  document.getElementById("tPitch").textContent   = f(t.pitch) + "°";
+  document.getElementById("tRoll").textContent    = f(t.roll) + "°";
+  document.getElementById("tMode").textContent    = t.flight_mode || "—";
+  document.getElementById("tPos").textContent     = `${f(t.lat,5)}, ${f(t.lon,5)}`;
+
+  // Battery with colour coding
+  const batEl = document.getElementById("tBattery");
+  batEl.textContent = f(t.battery_level, 0) + "%";
+  batEl.className = "stat-value" + (t.battery_level > 30 ? " ok" : t.battery_level > 15 ? " warn" : " crit");
+
+  document.getElementById("tVoltage").textContent = f(t.battery_voltage) + " V";
+
+  const gpsEl = document.getElementById("tGPS");
+  gpsEl.textContent = (FIX_LABELS[t.gps_fix_type] || "—") + ` (${t.satellites_visible})`;
+  gpsEl.className = "stat-value" + (t.gps_fix_type >= 3 ? " ok" : t.gps_fix_type == 2 ? " warn" : " crit");
+
+  // Move drone marker
+  if (t.lat && t.lon) updateDroneMarker(t.lat, t.lon, t.heading);
+
+  // Traffic aircraft
+  if (t.traffic) updateTrafficMarkers(t.traffic);
+
+  // TCAS proximity alerts
+  if (t.proximity_alerts) updateTcas(t.proximity_alerts);
+
+  document.getElementById("sbWpState").textContent =
+    `WP ${t.current_waypoint}/${t.total_waypoints} · ${t.mission_state}`;
+});
+
+const DRONE_SVG = `
+  <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" width="48" height="48">
+    <polygon points="32,4 38,48 32,42 26,48" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.5"/>
+    <polygon points="32,20 6,38 14,40"  fill="#60a5fa" stroke="#1d4ed8" stroke-width="1"/>
+    <polygon points="32,20 58,38 50,40" fill="#60a5fa" stroke="#1d4ed8" stroke-width="1"/>
+    <polygon points="32,42 18,54 24,54" fill="#93c5fd" stroke="#1d4ed8" stroke-width="1"/>
+    <polygon points="32,42 46,54 40,54" fill="#93c5fd" stroke="#1d4ed8" stroke-width="1"/>
+    <ellipse cx="32" cy="14" rx="3" ry="5" fill="#bfdbfe"/>
+  </svg>`;
+
+function updateDroneMarker(lat, lon, heading) {
+  if (!droneMarker) {
+    // Create the marker exactly once — SVG rendered at heading=0, transitions set via CSS
+    const icon = L.divIcon({
+      html: `<div style="transform:rotate(${heading}deg);
+                         transition:transform 0.25s ease-out;
+                         width:48px; height:48px;
+                         filter:drop-shadow(0 2px 6px rgba(59,130,246,0.9));">
+               ${DRONE_SVG}
+             </div>`,
+      className: "",
+      iconSize: [48, 48],
+      iconAnchor: [24, 24]
+    });
+    droneMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 }).addTo(map);
+
+    // Smooth position glide: Leaflet moves the marker via CSS transform — adding a
+    // transition here makes each setLatLng() animate between telemetry ticks (0.5 s)
+    // instead of jumping.  requestAnimationFrame ensures the element exists first.
+    requestAnimationFrame(() => {
+      const el = droneMarker.getElement();
+      if (el) el.style.transition = 'transform 0.45s linear';
+    });
+    return;
+  }
+
+  // ---- subsequent updates: NO setIcon() ----
+  // setLatLng() glides the marker to the new position via the transition above.
+  droneMarker.setLatLng([lat, lon]);
+
+  // Rotate the inner wrapper div directly — no DOM teardown, no flicker.
+  const el = droneMarker.getElement();
+  if (el && el.firstElementChild) {
+    el.firstElementChild.style.transform = `rotate(${heading}deg)`;
+  }
+}
+
+// ============================================================
+// Scenario alerts
+// ============================================================
+socket.on("scenario_injected", s => {
+  showScenarioAlert(s);
+});
+socket.on("scenario_cleared", d => {
+  removeScenarioAlert(d.type);
+});
+
+function showScenarioAlert(s) {
+  const card = document.getElementById("scenarioCard");
+  card.style.display = "";
+  const list = document.getElementById("scenarioList");
+  if (document.getElementById("sa-" + s.type)) return; // already shown
+  const el = document.createElement("div");
+  el.className = `scenario-alert ${s.severity}`;
+  el.id = "sa-" + s.type;
+  el.innerHTML = `<span class="icon">${s.icon}</span>
+    <div class="body">
+      <div class="label">${s.label}</div>
+      <div class="desc">${s.description}</div>
+    </div>`;
+  list.appendChild(el);
+
+  // Play alert sound via Web Audio
+  playAlertBeep(s.severity === "critical" ? 880 : 440);
+}
+
+function removeScenarioAlert(type) {
+  const el = document.getElementById("sa-" + type);
+  if (el) el.remove();
+  if (!document.getElementById("scenarioList").children.length) {
+    document.getElementById("scenarioCard").style.display = "none";
+  }
+}
+
+function playAlertBeep(freq) {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    osc.start(); osc.stop(ctx.currentTime + 0.5);
+  } catch(e) {}
+}
+
+// ============================================================
+// Mission complete + debrief
+// ============================================================
+socket.on("mission_complete", async t => {
+  if (!sessionId) return;
+  try {
+    const res = await fetch(`/api/session/${sessionId}/debrief`);
+    const data = await res.json();
+    if (!res.ok) return;
+
+    // Persist score to localStorage so mission grid shows history next time
+    if (traineeName && selectedMission) {
+      saveScore(traineeName, selectedMission.id, data.score.score, data.score.grade,
+                selectedMission.pass_score);
+      const passed = data.score.score >= selectedMission.pass_score;
+      const next   = curriculum.find(m => m.level === selectedMission.level + 1);
+      if (passed && next) {
+        setTimeout(() => {
+          const sb = document.getElementById("sbWpState");
+          sb.innerHTML =
+            `<span style="color:#22c55e;font-weight:700;">✓ Mission passed! ${next.title} unlocked.</span>`;
+        }, 1800);
+      }
+    }
+    showMissionBanner(data.score);
+  } catch(e) {}
+});
+
+function showMissionBanner(score) {
+  const passScore = selectedMission ? selectedMission.pass_score : 60;
+  const passed    = score.score >= passScore;
+  document.getElementById("bannerScore").textContent = score.score;
+  document.getElementById("bannerGrade").textContent =
+    `Grade: ${score.grade} · ${passed ? "✓ PASSED" : "✗ FAILED (need " + passScore + ")"}`;
+  document.getElementById("missionBanner").classList.add("visible");
+}
+
+document.getElementById("btnDebrief").onclick = async () => {
+  if (!sessionId) return;
+  const res = await fetch(`/api/session/${sessionId}/debrief`);
+  const data = await res.json();
+  if (res.ok) renderFullDebrief(data.score);
+};
+
+document.getElementById("btnCloseDebrief").onclick = () =>
+  document.getElementById("modalDebrief").classList.remove("open");
+
+function renderFullDebrief(score) {
+  const el = document.getElementById("fullDebriefContent");
+  const gradeColor = score.score >= 70 ? "#22c55e" : score.score >= 60 ? "#f59e0b" : "#ef4444";
+  let html = `
+    <div style="text-align:center; margin-bottom:20px;">
+      <div style="font-size:3.5rem; font-weight:900; color:${gradeColor};">${score.score}</div>
+      <div style="color:#94a3b8;">Grade ${score.grade} · ${score.flight_duration_s}s flight</div>
+      <div style="color:#94a3b8; margin-top:4px;">${score.waypoints_reached}/${score.total_waypoints} waypoints reached</div>
+    </div>
+    <div class="debrief-grid">`;
+
+  for (const [key, crit] of Object.entries(score.criteria || {})) {
+    const c = crit.points >= 70 ? "#22c55e" : crit.points >= 50 ? "#f59e0b" : "#ef4444";
+    html += `<div class="debrief-item">
+      <div class="debrief-label">${crit.label}</div>
+      <div class="debrief-score" style="color:${c};">${crit.points}<span style="font-size:.7rem; color:#94a3b8;">/100</span></div>
+    </div>`;
+  }
+  html += "</div>";
+  el.innerHTML = html;
+  document.getElementById("modalDebrief").classList.add("open");
+}
+
+// ============================================================
+// Replay
+// ============================================================
+document.getElementById("btnReplay").onclick = async () => {
+  if (!sessionId) return;
+  const res = await fetch(`/api/session/${sessionId}/flight_log`);
+  const data = await res.json();
+  if (!res.ok) return;
+  startReplay(data.flight_log);
+};
+
+let replayInterval = null;
+function startReplay(log) {
+  if (replayInterval) clearInterval(replayInterval);
+  clearMap();
+
+  // Plot planned waypoints
+  if (log.length) {
+    let i = 0;
+    const replayPath = L.polyline([], { color: "#f59e0b", weight: 2, dashArray: "4 4" }).addTo(map);
+    replayInterval = setInterval(() => {
+      if (i >= log.length) { clearInterval(replayInterval); return; }
+      const p = log[i++];
+      replayPath.addLatLng([p.lat, p.lon]);
+      updateDroneMarker(p.lat, p.lon, p.heading);
+    }, 200);
+  }
+}
+
+// ============================================================
+// Traffic (DAA — Detect and Avoid)
+// ============================================================
+const TRAFFIC_SVG = `
+  <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" width="36" height="36">
+    <polygon points="32,4 38,48 32,42 26,48" fill="#fff7ed" stroke="#c2410c" stroke-width="1.5"/>
+    <polygon points="32,20 6,38 14,40"  fill="#fb923c" stroke="#c2410c" stroke-width="1"/>
+    <polygon points="32,20 58,38 50,40" fill="#fb923c" stroke="#c2410c" stroke-width="1"/>
+    <polygon points="32,42 18,54 24,54" fill="#fed7aa" stroke="#c2410c" stroke-width="1"/>
+    <polygon points="32,42 46,54 40,54" fill="#fed7aa" stroke="#c2410c" stroke-width="1"/>
+    <ellipse cx="32" cy="14" rx="3" ry="5" fill="#ffedd5"/>
+  </svg>`;
+
+function updateTrafficMarkers(trafficList) {
+  if (!map) return;
+  const seen = new Set();
+  trafficList.forEach(tf => {
+    seen.add(tf.callsign);
+    if (!trafficMarkers[tf.callsign]) {
+      // Create once
+      const icon = L.divIcon({
+        html: `<div style="transform:rotate(${tf.heading}deg);
+                           transition:transform 0.3s ease-out;
+                           width:36px; height:36px;
+                           filter:drop-shadow(0 2px 5px rgba(251,146,60,.8));">
+                 ${TRAFFIC_SVG}</div>
+               <div style="position:absolute; top:38px; left:50%; transform:translateX(-50%);
+                           white-space:nowrap; font-size:9px; font-weight:700;
+                           color:#fb923c; text-shadow:0 1px 2px #000;">${tf.callsign}</div>`,
+        className: "", iconSize: [36, 50], iconAnchor: [18, 18]
+      });
+      trafficMarkers[tf.callsign] = L.marker([tf.lat, tf.lon], {
+        icon, zIndexOffset: 800, interactive: false
+      }).bindTooltip(`${tf.callsign} · ${tf.alt}m AGL`, { permanent: false }).addTo(map);
+      requestAnimationFrame(() => {
+        const el = trafficMarkers[tf.callsign].getElement();
+        if (el) el.style.transition = "transform 0.45s linear";
+      });
+    } else {
+      // Update position + heading
+      trafficMarkers[tf.callsign].setLatLng([tf.lat, tf.lon]);
+      const el = trafficMarkers[tf.callsign].getElement();
+      if (el && el.firstElementChild) {
+        el.firstElementChild.style.transform = `rotate(${tf.heading}deg)`;
+      }
+    }
+  });
+  // Remove stale markers
+  Object.keys(trafficMarkers).forEach(cs => {
+    if (!seen.has(cs)) {
+      map.removeLayer(trafficMarkers[cs]);
+      delete trafficMarkers[cs];
+    }
+  });
+}
+
+// Also freeze traffic marker transitions during zoom
+// (added inside initMap via the existing zoomstart/zoomend handlers below)
+function _freezeTrafficTransitions(freeze) {
+  Object.values(trafficMarkers).forEach(m => {
+    const el = m.getElement();
+    if (!el) return;
+    el.style.transition = freeze ? "none" : "transform 0.45s linear";
+  });
+}
+
+// ---- TCAS proximity alerts ------------------------------------------------
+let _tcasSoundCooldown = 0;
+
+function updateTcas(alerts) {
+  const strip = document.getElementById("tcasStrip");
+  if (!alerts.length) { strip.style.display = "none"; strip.innerHTML = ""; return; }
+
+  strip.style.display = "flex";
+  strip.innerHTML = alerts.map(a => {
+    const dir = bearingLabel(a.bearing);
+    const vSign = a.alt_diff_m > 0 ? `+${a.alt_diff_m}` : `${a.alt_diff_m}`;
+    const urgent = a.distance_m < 200;
+    return `<div style="background:${urgent ? "rgba(220,38,38,.92)" : "rgba(245,158,11,.9)"};
+                 padding:6px 14px; border-radius:6px; font-size:.8rem; font-weight:700;
+                 color:#fff; display:flex; align-items:center; gap:10px;
+                 box-shadow:0 2px 8px rgba(0,0,0,.5);">
+      <span style="font-size:1.1rem;">✈</span>
+      <span>TRAFFIC · <b>${a.callsign}</b></span>
+      <span>${a.distance_m}m ${dir}</span>
+      <span style="font-size:.75rem; opacity:.85;">${vSign}m alt</span>
+    </div>`;
+  }).join("");
+
+  // Sound: only if new alert appeared since last tick, and not on cooldown
+  const now = Date.now();
+  if (now > _tcasSoundCooldown) {
+    playAlertBeep(alerts.some(a => a.distance_m < 200) ? 1200 : 660);
+    _tcasSoundCooldown = now + 3000;
+  }
+}
+
+function bearingLabel(deg) {
+  const labels = ["N","NE","E","SE","S","SW","W","NW","N"];
+  return labels[Math.round(deg / 45) % 8];
+}
+
+// ---- Crash screen ---------------------------------------------------------
+socket.on("aircraft_crashed", t => {
+  // Disable all controls immediately
+  enableControls(false);
+  document.getElementById("btnLaunch").disabled = true;
+
+  const col = t.collision || {};
+  document.getElementById("crashSubtitle").textContent =
+    col.callsign ? `Mid-Air Collision with ${col.callsign}` : "Mid-Air Collision";
+  document.getElementById("crashDetail").textContent =
+    col.h_dist_m != null
+      ? `Horizontal separation: ${col.h_dist_m} m  ·  Vertical: ${col.v_dist_m} m`
+      : "";
+
+  // Dramatic: shake the map div then show overlay
+  const mapEl = document.getElementById("map");
+  mapEl.style.animation = "shake 0.4s ease";
+  setTimeout(() => {
+    mapEl.style.animation = "";
+    document.getElementById("crashOverlay").style.display = "flex";
+    document.getElementById("tcasStrip").style.display = "none";
+  }, 420);
+
+  // Dissonant crash sound
+  try {
+    const ctx = new AudioContext();
+    [180, 240, 310].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.connect(g); g.connect(ctx.destination);
+      osc.type = "sawtooth";
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.25, ctx.currentTime + i * 0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8 + i * 0.05);
+      osc.start(ctx.currentTime + i * 0.05);
+      osc.stop(ctx.currentTime + 1.0);
+    });
+  } catch(e) {}
+});
+
+// ============================================================
+// Init
+// ============================================================
+window.onload = () => {
+  initMap();
+  if (!sessionId) {
+    setTimeout(openSessionModal, 600);
+  }
+};
+</script>
+{% endblock %}

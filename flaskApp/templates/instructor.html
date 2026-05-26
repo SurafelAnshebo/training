@@ -1,0 +1,571 @@
+{% extends "base.html" %}
+
+{% block title %}Supervisor Dashboard — BVLOS Simulator{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  body { overflow-y: auto; }
+
+  .inst-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    grid-template-rows: 60px 1fr;
+    height: 100vh;
+  }
+
+  .inst-topbar {
+    grid-column: 1 / -1;
+    background: var(--bg-dark);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 20px;
+  }
+  .inst-topbar img { width: 30px; height: 30px; object-fit: contain; }
+  .inst-topbar .title { font-size: 1.05rem; font-weight: 800; color: #fff; }
+  .inst-topbar .subtitle { font-size: .75rem; color: var(--text-dim); margin-left: 4px; }
+  .inst-topbar .spacer { flex: 1; }
+  .inst-topbar .pill {
+    background: var(--bg-card); border-radius: 20px;
+    padding: 4px 12px; font-size: .75rem; color: var(--text-dim);
+  }
+  .inst-topbar .pill span { color: var(--accent-g); font-weight: 700; }
+
+  .session-panel {
+    background: var(--bg-mid);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .session-panel .panel-header {
+    padding: 14px 16px; font-size: .7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .08em;
+    color: var(--text-dim); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .session-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .session-card {
+    background: var(--bg-card); border-radius: var(--radius);
+    padding: 10px 12px; margin-bottom: 6px; cursor: pointer;
+    border: 2px solid transparent; transition: border-color .15s;
+  }
+  .session-card:hover { border-color: var(--accent); }
+  .session-card.active { border-color: var(--accent-g); }
+  .session-card .sc-name { font-weight: 700; font-size: .88rem; }
+  .session-card .sc-id   { font-size: .68rem; color: var(--text-dim); font-family: monospace; }
+  .session-card .sc-meta { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; }
+  .badge { padding: 2px 7px; border-radius: 10px; font-size: .66rem; font-weight: 700; }
+  .badge-blue   { background: rgba(59,130,246,.2);  color: #93c5fd; }
+  .badge-green  { background: rgba(34,197,94,.2);   color: #86efac; }
+  .badge-yellow { background: rgba(245,158,11,.2);  color: #fde68a; }
+  .badge-red    { background: rgba(239,68,68,.2);   color: #fca5a5; }
+  .badge-purple { background: rgba(124,58,237,.2);  color: #c4b5fd; }
+  .no-sessions { padding: 24px; text-align: center; color: var(--text-dim); font-size: .85rem; }
+
+  .detail-panel { display: flex; flex-direction: column; overflow: hidden; }
+  .detail-topbar {
+    padding: 10px 20px; border-bottom: 1px solid var(--border);
+    background: var(--bg-dark);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .detail-topbar h3 { font-size: .95rem; flex: 1; min-width: 120px; }
+
+  .detail-body { flex: 1; overflow: hidden; display: grid; grid-template-columns: 260px 1fr; }
+
+  /* Supervisor panel (left of map) */
+  .super-panel {
+    background: var(--bg-mid); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow-y: auto;
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: .8rem; }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-lbl { color: var(--text-dim); }
+  .stat-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  .scenario-tag {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; background: rgba(239,68,68,.1);
+    border: 1px solid rgba(239,68,68,.25); border-radius: var(--radius);
+    font-size: .78rem; margin-bottom: 4px;
+  }
+  .scenario-tag.warning { background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.25); }
+
+  .telemetry-overlay {
+    position: absolute; top: 12px; right: 12px; z-index: 400;
+    background: rgba(15,20,30,.88); backdrop-filter: blur(4px);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; min-width: 210px; font-size: .78rem;
+  }
+  .t-row { display: flex; justify-content: space-between; gap: 14px; padding: 2px 0; }
+  .t-lbl { color: var(--text-dim); }
+  .t-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  #inst-map { width: 100%; height: 100%; }
+
+  .empty-state {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    color: var(--text-dim); gap: 8px;
+  }
+  .empty-state .emo { font-size: 3rem; }
+  .empty-state p { font-size: .85rem; }
+
+  .obj-item {
+    display: flex; gap: 8px; margin-bottom: 5px;
+    font-size: .75rem; color: var(--text-dim); line-height: 1.4;
+  }
+  .obj-item span:first-child { color: var(--accent); flex-shrink: 0; }
+
+  .progress-bar-bg {
+    background: var(--bg-dark); border-radius: 4px; height: 6px; overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%; border-radius: 4px;
+    transition: width .5s ease;
+  }
+
+  .note-box {
+    background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.2);
+    border-radius: 6px; padding: 10px 12px;
+    font-size: .75rem; color: var(--text-dim); line-height: 1.5;
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="inst-layout">
+
+  <!-- Top bar -->
+  <header class="inst-topbar">
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="logo">
+    <span class="title">Supervisor View</span>
+    <span class="subtitle">BVLOS Flight Training — Read-Only Monitor</span>
+    <div class="spacer"></div>
+    <div class="pill">Active sessions: <span id="sessionCount">0</span></div>
+    <a href="/" style="color:var(--text-dim); font-size:.8rem; text-decoration:none; margin-left:8px;">Trainee View →</a>
+  </header>
+
+  <!-- Left: session list -->
+  <aside class="session-panel">
+    <div class="panel-header">
+      <span>Active Trainees</span>
+      <span id="lastUpdate" style="font-size:.65rem; color:var(--text-dim);">live</span>
+    </div>
+    <div class="session-list" id="sessionList">
+      <div class="no-sessions">No active sessions.<br>Trainees connect via the main page.</div>
+    </div>
+  </aside>
+
+  <!-- Right: detail -->
+  <section class="detail-panel" id="detailPanel">
+    <div class="empty-state" id="emptyState">
+      <div class="emo">🛩</div>
+      <p>Select a session from the list to begin monitoring.</p>
+      <p style="font-size:.75rem; margin-top:4px;">Scenarios fire automatically per mission curriculum — no action needed.</p>
+    </div>
+
+    <!-- Populated when a session is selected -->
+    <div id="sessionDetail" style="display:none; flex:1; flex-direction:column; overflow:hidden;">
+
+      <div class="detail-topbar">
+        <h3 id="detailName">—</h3>
+        <span id="detailMission" class="badge badge-blue" style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">—</span>
+        <span id="detailState"  class="badge badge-blue">—</span>
+        <span id="detailBat"    class="badge badge-green">—</span>
+        <span id="detailTime"   style="font-size:.75rem; color:var(--text-dim); margin-left:4px;">0 s</span>
+        <div class="spacer" style="flex:1;"></div>
+        <button class="btn btn-warning btn-sm" id="instHover"   title="Safety override: command hover">⏸ Hover</button>
+        <button class="btn btn-danger  btn-sm" id="instLand"    title="Safety override: command land">⬇ Land</button>
+        <button class="btn btn-primary btn-sm" id="instDebrief">📋 Debrief</button>
+      </div>
+
+      <div class="detail-body">
+        <!-- Supervisor panel -->
+        <div class="super-panel">
+
+          <!-- Mission info -->
+          <div class="card">
+            <div class="card-title" id="missionTitle" style="margin-bottom:6px;">—</div>
+            <div id="missionDiff" style="margin-bottom:8px;"></div>
+            <div id="missionObjectives"></div>
+          </div>
+
+          <!-- Flight status -->
+          <div class="card">
+            <div class="card-title" style="margin-bottom:8px;">Flight Status</div>
+            <div class="stat-row">
+              <span class="stat-lbl">Waypoints</span>
+              <span class="stat-val" id="s-wps">— / —</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-lbl">Altitude</span>
+              <span class="stat-val" id="s-alt">— m</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-lbl">Speed</span>
+              <span class="stat-val" id="s-spd">— m/s</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-lbl">Battery</span>
+              <span class="stat-val" id="s-bat">—%</span>
+            </div>
+            <div style="margin-top:8px;">
+              <div style="display:flex; justify-content:space-between; font-size:.7rem; color:var(--text-dim); margin-bottom:3px;">
+                <span>Battery</span><span id="s-bat-pct">—%</span>
+              </div>
+              <div class="progress-bar-bg">
+                <div class="progress-bar-fill" id="batBar" style="width:100%; background:#22c55e;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Active scenarios -->
+          <div class="card">
+            <div class="card-title" style="margin-bottom:8px;">
+              Active Scenarios
+              <span style="font-size:.65rem; font-weight:400; color:var(--text-dim); margin-left:4px;">(auto-scripted)</span>
+            </div>
+            <div id="activeScenarios">
+              <span style="font-size:.75rem; color:var(--text-dim);">None active</span>
+            </div>
+          </div>
+
+          <!-- Note -->
+          <div class="note-box">
+            Scenarios fire automatically from the mission curriculum. The trainee's responses are scored in real time. Use the safety overrides above only if the trainee is in danger of leaving the operational area.
+          </div>
+
+        </div><!-- super-panel -->
+
+        <!-- Live map -->
+        <div style="position:relative; flex:1; overflow:hidden;">
+          <div id="inst-map"></div>
+          <div class="telemetry-overlay" id="telOverlay">
+            <div style="font-size:.6rem; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;">Live Telemetry</div>
+            <div class="t-row"><span class="t-lbl">Alt</span>     <span class="t-val" id="it-alt">—</span></div>
+            <div class="t-row"><span class="t-lbl">Speed</span>   <span class="t-val" id="it-spd">—</span></div>
+            <div class="t-row"><span class="t-lbl">Heading</span> <span class="t-val" id="it-hdg">—</span></div>
+            <div class="t-row"><span class="t-lbl">V-Rate</span>  <span class="t-val" id="it-vrt">—</span></div>
+            <div class="t-row"><span class="t-lbl">Battery</span> <span class="t-val" id="it-bat">—</span></div>
+            <div class="t-row"><span class="t-lbl">GPS</span>     <span class="t-val" id="it-gps">—</span></div>
+            <div class="t-row"><span class="t-lbl">Mode</span>    <span class="t-val" id="it-mode">—</span></div>
+          </div>
+        </div>
+
+      </div><!-- detail-body -->
+    </div><!-- sessionDetail -->
+  </section>
+</div>
+
+<!-- Debrief modal -->
+<div class="modal-backdrop" id="debriefModal">
+  <div class="modal" style="width:580px; max-height:90vh; overflow-y:auto;">
+    <h3 id="debriefTitle">Flight Debrief</h3>
+    <div id="debriefBody"></div>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-neutral"
+              onclick="document.getElementById('debriefModal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedSession = null;
+let instMap = null, instDroneMarker = null;
+let curriculum = {};   // keyed by mission id
+let socket = io();
+
+socket.emit("join_instructor");
+
+// ============================================================
+// Load curriculum once for mission info display
+// ============================================================
+fetch("/api/curriculum").then(r => r.json()).then(d => {
+  (d.missions || []).forEach(m => { curriculum[m.id] = m; });
+});
+
+// ============================================================
+// Session list — refresh every 2 s
+// ============================================================
+async function refreshSessions() {
+  const res = await fetch("/instructor/sessions");
+  if (!res.ok) return;
+  const { sessions } = await res.json();
+  renderSessionList(sessions);
+  document.getElementById("lastUpdate").textContent = new Date().toLocaleTimeString();
+}
+setInterval(refreshSessions, 2000);
+refreshSessions();
+
+function renderSessionList(sessions) {
+  document.getElementById("sessionCount").textContent = sessions.length;
+  const el = document.getElementById("sessionList");
+  if (!sessions.length) {
+    el.innerHTML = `<div class="no-sessions">No active sessions.<br>Trainees connect via the main page.</div>`;
+    return;
+  }
+  el.innerHTML = sessions.map(s => {
+    const stateClass = { COMPLETE:"badge-green", LANDING:"badge-yellow",
+                         NAVIGATING:"badge-blue", ABORTED:"badge-red" }[s.mission_state] || "badge-blue";
+    const batClass = s.battery_level > 30 ? "badge-green" : s.battery_level > 15 ? "badge-yellow" : "badge-red";
+    const m = s.mission_id ? curriculum[s.mission_id] : null;
+    const scBadges = s.active_scenarios.map(sc =>
+      `<span class="badge badge-red">${sc.replace(/_/g," ")}</span>`
+    ).join("");
+    return `<div class="session-card ${selectedSession === s.session_id ? "active" : ""}"
+                 onclick="selectSession('${s.session_id}','${s.trainee_name}')">
+      <div class="sc-name">${s.trainee_name}</div>
+      <div class="sc-id">${s.session_id}</div>
+      <div class="sc-meta">
+        <span class="badge ${stateClass}">${s.mission_state}</span>
+        ${m ? `<span class="badge badge-purple" style="background:${m.color}22;color:${m.color};">${m.title}</span>` : ""}
+        <span class="badge ${batClass}">🔋 ${s.battery_level.toFixed(0)}%</span>
+        ${scBadges}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ============================================================
+// Select session to monitor
+// ============================================================
+let joinedRoom = null;
+function selectSession(sid, name) {
+  selectedSession = sid;
+  document.getElementById("emptyState").style.display = "none";
+  const detail = document.getElementById("sessionDetail");
+  detail.style.display = "flex";
+  detail.style.flexDirection = "column";
+  document.getElementById("detailName").textContent = name;
+
+  if (!instMap) initInstMap();
+  if (joinedRoom !== sid) {
+    socket.emit("join_session", { session_id: sid });
+    joinedRoom = sid;
+  }
+}
+
+function populateMissionPanel(missionId) {
+  const m = missionId ? curriculum[missionId] : null;
+  if (!m) {
+    document.getElementById("missionTitle").textContent = "Free Flight";
+    document.getElementById("missionDiff").innerHTML = "";
+    document.getElementById("missionObjectives").innerHTML = "";
+    document.getElementById("detailMission").textContent = "Free flight";
+    return;
+  }
+  document.getElementById("detailMission").textContent = `${m.title}: ${m.subtitle}`;
+  document.getElementById("detailMission").style.background = m.color + "22";
+  document.getElementById("detailMission").style.color = m.color;
+
+  document.getElementById("missionTitle").textContent = `${m.title}: ${m.subtitle}`;
+  document.getElementById("missionDiff").innerHTML =
+    `<span style="font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:20px;
+      background:${m.color}22;color:${m.color};border:1px solid ${m.color}44;">
+      ${m.difficulty}</span>
+    <span style="font-size:.65rem;color:var(--text-dim);margin-left:8px;">Pass: ${m.pass_score}/100</span>`;
+  document.getElementById("missionObjectives").innerHTML = m.objectives.map(o =>
+    `<div class="obj-item"><span>▸</span><span>${o}</span></div>`
+  ).join("");
+}
+
+// ============================================================
+// Instructor map
+// ============================================================
+function initInstMap() {
+  instMap = L.map("inst-map").setView([33.83, -84.29], 11);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(instMap);
+  L.circle([33.888087, -84.463577], {
+    radius: 2.2*1852, color:"#ef4444", fillColor:"#ef4444", fillOpacity:0.12, weight:2
+  }).bindTooltip("TFR: 3 NM").addTo(instMap);
+
+  // Freeze position transition during zoom (same fix as trainee view)
+  instMap.on("zoomstart", () => {
+    if (instDroneMarker) {
+      const el = instDroneMarker.getElement();
+      if (el) el.style.transition = "none";
+    }
+  });
+  instMap.on("zoomend", () => {
+    if (instDroneMarker) {
+      const el = instDroneMarker.getElement();
+      if (el) requestAnimationFrame(() => { el.style.transition = "transform 0.45s linear"; });
+    }
+  });
+}
+
+// ============================================================
+// Socket: session_update (overview, fires every telemetry tick)
+// ============================================================
+socket.on("session_update", s => {
+  if (s.session_id !== selectedSession) return;
+
+  const stateClass = { COMPLETE:"badge-green", LANDING:"badge-yellow",
+                       NAVIGATING:"badge-blue", ABORTED:"badge-red" }[s.mission_state] || "badge-blue";
+  const batClass = s.battery_level > 30 ? "badge-green" : s.battery_level > 15 ? "badge-yellow" : "badge-red";
+
+  document.getElementById("detailState").className = `badge ${stateClass}`;
+  document.getElementById("detailState").textContent = s.mission_state;
+  document.getElementById("detailBat").className = `badge ${batClass}`;
+  document.getElementById("detailBat").textContent = `🔋 ${s.battery_level.toFixed(0)}%`;
+  document.getElementById("detailTime").textContent = `${s.elapsed_s}s`;
+
+  document.getElementById("s-wps").textContent =
+    `${s.current_waypoint ?? "—"} / ${s.total_waypoints ?? "—"}`;
+  document.getElementById("s-alt").textContent = `${(s.alt || 0).toFixed(1)} m`;
+  document.getElementById("s-spd").textContent = `${(s.groundspeed || 0).toFixed(1)} m/s`;
+
+  const batLvl = s.battery_level || 0;
+  document.getElementById("s-bat").textContent = `${batLvl.toFixed(0)}%`;
+  document.getElementById("s-bat-pct").textContent = `${batLvl.toFixed(0)}%`;
+  const batBar = document.getElementById("batBar");
+  batBar.style.width = `${batLvl}%`;
+  batBar.style.background = batLvl > 30 ? "#22c55e" : batLvl > 15 ? "#f59e0b" : "#ef4444";
+
+  renderActiveScenarios(s.active_scenarios || []);
+  populateMissionPanel(s.mission_id);
+});
+
+// Full telemetry (from the session room)
+socket.on("telemetry", t => {
+  if (!selectedSession) return;
+  const f = (v, d=1) => v != null ? (+v).toFixed(d) : "—";
+  document.getElementById("it-alt").textContent  = f(t.alt) + " m";
+  document.getElementById("it-spd").textContent  = f(t.groundspeed) + " m/s";
+  document.getElementById("it-hdg").textContent  = f(t.heading, 0) + "°";
+  document.getElementById("it-vrt").textContent  = (t.vertical_rate >= 0 ? "+" : "") + f(t.vertical_rate) + " m/s";
+  document.getElementById("it-bat").textContent  = f(t.battery_level, 0) + "% / " + f(t.battery_voltage) + " V";
+  document.getElementById("it-gps").textContent  = `${t.gps_fix_type}D (${t.satellites_visible})`;
+  document.getElementById("it-mode").textContent = t.flight_mode;
+
+  if (t.lat && instMap) updateInstDroneMarker(t.lat, t.lon, t.heading);
+});
+
+function renderActiveScenarios(active) {
+  const el = document.getElementById("activeScenarios");
+  if (!active.length) {
+    el.innerHTML = `<span style="font-size:.75rem; color:var(--text-dim);">None active</span>`;
+    return;
+  }
+  const ICONS = {
+    GPS_DEGRADED:"📡", GPS_LOST:"🚫", WIND_SHEAR:"💨",
+    BATTERY_WARNING:"🔋", BATTERY_CRITICAL:"⚡",
+    COMMS_DEGRADED:"📻", TFR_POPUP:"🚧", OBSTACLE_DETECTED:"⚠️"
+  };
+  const SEVERITY_CLASS = {
+    BATTERY_CRITICAL:"", COMMS_DEGRADED:"warning",
+    BATTERY_WARNING:"warning", WIND_SHEAR:"warning"
+  };
+  el.innerHTML = active.map(type =>
+    `<div class="scenario-tag ${SEVERITY_CLASS[type] || ""}">
+       <span style="font-size:1.1rem;">${ICONS[type] || "⚠️"}</span>
+       <span style="font-weight:700; font-size:.78rem;">${type.replace(/_/g," ")}</span>
+     </div>`
+  ).join("");
+}
+
+// ============================================================
+// Drone marker (same flicker-free approach as trainee view)
+// ============================================================
+const INST_DRONE_SVG = `
+  <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" width="44" height="44">
+    <polygon points="32,4 38,48 32,42 26,48" fill="#ffffff" stroke="#1d4ed8" stroke-width="1.5"/>
+    <polygon points="32,20 6,38 14,40"  fill="#60a5fa" stroke="#1d4ed8" stroke-width="1"/>
+    <polygon points="32,20 58,38 50,40" fill="#60a5fa" stroke="#1d4ed8" stroke-width="1"/>
+    <polygon points="32,42 18,54 24,54" fill="#93c5fd" stroke="#1d4ed8" stroke-width="1"/>
+    <polygon points="32,42 46,54 40,54" fill="#93c5fd" stroke="#1d4ed8" stroke-width="1"/>
+    <ellipse cx="32" cy="14" rx="3" ry="5" fill="#bfdbfe"/>
+  </svg>`;
+
+function updateInstDroneMarker(lat, lon, heading) {
+  if (!instDroneMarker) {
+    const icon = L.divIcon({
+      html: `<div style="transform:rotate(${heading}deg);
+                         transition:transform 0.25s ease-out;
+                         width:44px; height:44px;
+                         filter:drop-shadow(0 2px 6px rgba(59,130,246,0.9));">
+               ${INST_DRONE_SVG}</div>`,
+      className: "", iconSize: [44,44], iconAnchor: [22,22]
+    });
+    instDroneMarker = L.marker([lat, lon], { icon, zIndexOffset:1000 }).addTo(instMap);
+    requestAnimationFrame(() => {
+      const el = instDroneMarker.getElement();
+      if (el) el.style.transition = "transform 0.45s linear";
+    });
+    return;
+  }
+  instDroneMarker.setLatLng([lat, lon]);
+  const el = instDroneMarker.getElement();
+  if (el && el.firstElementChild) {
+    el.firstElementChild.style.transform = `rotate(${heading}deg)`;
+  }
+}
+
+// ============================================================
+// Safety overrides (instructor use only — for operational boundary breaches)
+// ============================================================
+document.getElementById("instHover").onclick = () => {
+  if (!selectedSession) return;
+  if (!confirm("Command HOVER on this session? Use only if the trainee is about to breach the operational boundary.")) return;
+  fetch(`/api/session/${selectedSession}/hover`, { method:"POST" });
+};
+document.getElementById("instLand").onclick = () => {
+  if (!selectedSession) return;
+  if (!confirm("Command LAND on this session? This will end the trainee's flight.")) return;
+  fetch(`/api/session/${selectedSession}/land`, { method:"POST" });
+};
+
+// ============================================================
+// Debrief
+// ============================================================
+document.getElementById("instDebrief").onclick = async () => {
+  if (!selectedSession) return;
+  const res = await fetch(`/api/session/${selectedSession}/debrief`);
+  const data = await res.json();
+  if (res.ok) renderDebriefModal(data);
+};
+
+function renderDebriefModal(data) {
+  const score = data.score;
+  const gc = score.score >= 70 ? "#22c55e" : score.score >= 60 ? "#f59e0b" : "#ef4444";
+  document.getElementById("debriefTitle").textContent =
+    `Debrief — ${data.session?.trainee_name || ""}`;
+
+  let html = `
+    <div style="text-align:center; margin-bottom:20px;">
+      <div style="font-size:3rem; font-weight:900; color:${gc};">${score.score}</div>
+      <div style="color:#94a3b8;">Grade ${score.grade} · ${score.flight_duration_s}s · ${score.waypoints_reached}/${score.total_waypoints} WPs</div>
+    </div>
+    <div class="debrief-grid">`;
+
+  for (const [, crit] of Object.entries(score.criteria || {})) {
+    const c = crit.points >= 70 ? "#22c55e" : crit.points >= 50 ? "#f59e0b" : "#ef4444";
+    html += `<div class="debrief-item">
+      <div class="debrief-label">${crit.label}</div>
+      <div class="debrief-score" style="color:${c};">${crit.points}<span style="font-size:.65rem;color:#94a3b8;">/100</span></div>
+    </div>`;
+  }
+  html += `</div>
+    <div style="margin-top:16px;">
+      <div class="card-title" style="margin-bottom:8px;">Event Timeline</div>
+      <div style="max-height:180px;overflow-y:auto;font-size:.75rem;font-family:monospace;color:var(--text-dim);">`;
+
+  for (const ev of (data.event_log || [])) {
+    html += `<div style="padding:2px 0;border-bottom:1px solid var(--border);">
+      <span style="color:var(--accent);">${(+ev.elapsed_s).toFixed(1)}s</span>
+      &nbsp;${ev.type}
+      ${ev.data?.type ? `<span style="color:var(--accent-y);"> ${ev.data.type}</span>` : ""}
+    </div>`;
+  }
+  html += "</div></div>";
+
+  document.getElementById("debriefBody").innerHTML = html;
+  document.getElementById("debriefModal").classList.add("open");
+}
+</script>
+{% endblock %}

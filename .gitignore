@@ -1,0 +1,33 @@
+# ArduPilot — not used by the simulator, excluded from the repo
+ardupilot/
+ardupilot_bin/
+firmware_patches/
+
+# Map tile cache
+flaskApp/static/images/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Environment / secrets — keep .env.example but not .env
+flaskApp/.env
+
+# Runtime / telemetry logs
+flaskApp/logs/
+flaskApp/terrain/
+flaskApp/*.tlog
+flaskApp/*.tlog.raw
+
+# Large GIS/raster files
+flaskApp/*.tif
+
+# Legacy SITL artifacts
+eeprom.bin
+*.bin
+*.elf
+flaskApp/hil_mission.py

@@ -1,0 +1,13 @@
+# Python 3.10+ required
+
+# Flask web framework + SocketIO
+Flask>=3.0.2
+Flask-SocketIO>=5.3.6
+python-socketio>=5.11.3
+python-engineio>=4.9.1
+
+# Configuration
+python-dotenv>=1.0
+
+# ArduPilot/DroneKit have been replaced by the built-in FlightSimulator.
+# No external drone dependencies required.
