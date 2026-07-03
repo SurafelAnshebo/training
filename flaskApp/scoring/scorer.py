@@ -84,6 +84,7 @@ def _score_completion(log: list[dict], waypoints: list[dict]) -> dict:
         "waypoints_reached": wp_reached,
         "total_waypoints": total,
         "completed": completed,
+        "crashed": final.get("mission_state") == "CRASHED",
         "label": "Mission Completion",
     }
 
@@ -162,6 +163,18 @@ def _score_emergency(events: list[dict]) -> dict:
 def _score_battery(log: list[dict], events: list[dict]) -> dict:
     final = log[-1]
     final_level = final.get("battery_level", 100)
+
+    crashed_on_battery = any(
+        e["type"] == "CRASHED" and e.get("data", {}).get("cause") == "battery_depletion"
+        for e in events
+    )
+    if crashed_on_battery:
+        return {
+            "points": 0,
+            "label": "Battery Management",
+            "final_battery_level": final_level,
+            "detail": "Battery depleted in flight — aircraft lost power and crashed.",
+        }
 
     critical_injections = [
         e for e in events

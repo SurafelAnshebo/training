@@ -246,7 +246,7 @@ The post-flight score is a weighted average out of 100 points:
 | Mission Completion | 30% | Fraction of waypoints reached; 100 pts if all complete |
 | Altitude Compliance | 20% | Percentage of flight time within ±15% of planned altitude |
 | Emergency Response | 25% | Average time from scenario injection to pilot action (hover/land/resume). ≤10 s = 100 pts, ≥60 s = 0 pts |
-| Battery Management | 15% | Landing with ≥20% battery remaining (100 pts), or prompt landing after Battery Critical injection |
+| Battery Management | 15% | Landing with ≥20% battery remaining (100 pts), or prompt landing after Battery Critical injection. **If the battery reaches 0% before landing, the aircraft loses power and crashes** — mission ends immediately with 0 points for this criterion. |
 | Landing Accuracy | 10% | Distance from planned landing point. ≤5 m = 100 pts, ≥60 m = 0 pts |
 
 **Grade scale:** A ≥ 90 · B ≥ 80 · C ≥ 70 · D ≥ 60 · F < 60

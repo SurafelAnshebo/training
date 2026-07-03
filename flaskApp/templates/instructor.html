@@ -310,7 +310,8 @@ function renderSessionList(sessions) {
   }
   el.innerHTML = sessions.map(s => {
     const stateClass = { COMPLETE:"badge-green", LANDING:"badge-yellow",
-                         NAVIGATING:"badge-blue", ABORTED:"badge-red" }[s.mission_state] || "badge-blue";
+                         NAVIGATING:"badge-blue", ABORTED:"badge-red",
+                         CRASHED:"badge-red", FAILSAFE:"badge-red" }[s.mission_state] || "badge-blue";
     const batClass = s.battery_level > 30 ? "badge-green" : s.battery_level > 15 ? "badge-yellow" : "badge-red";
     const m = s.mission_id ? curriculum[s.mission_id] : null;
     const scBadges = s.active_scenarios.map(sc =>
@@ -406,7 +407,8 @@ socket.on("session_update", s => {
   if (s.session_id !== selectedSession) return;
 
   const stateClass = { COMPLETE:"badge-green", LANDING:"badge-yellow",
-                       NAVIGATING:"badge-blue", ABORTED:"badge-red" }[s.mission_state] || "badge-blue";
+                       NAVIGATING:"badge-blue", ABORTED:"badge-red",
+                       CRASHED:"badge-red", FAILSAFE:"badge-red" }[s.mission_state] || "badge-blue";
   const batClass = s.battery_level > 30 ? "badge-green" : s.battery_level > 15 ? "badge-yellow" : "badge-red";
 
   document.getElementById("detailState").className = `badge ${stateClass}`;

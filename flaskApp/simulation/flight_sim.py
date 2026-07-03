@@ -8,7 +8,8 @@ Physics model:
   - Multirotor kinematics: position updated via spherical geometry
   - Speed ramps with constant acceleration; nose-down in cruise, banked in turns
   - GPS noise injected during GPS_DEGRADED scenario
-  - Battery drained proportionally to flight phase and active scenarios
+  - Battery drained proportionally to flight phase and active scenarios;
+    reaching 0% in flight cuts power and the aircraft crashes (FAILSAFE state)
 """
 import math
 import time
@@ -75,6 +76,7 @@ class MissionState(Enum):
     HOVERING  = "HOVERING"
     RTL       = "RTL"
     LANDING   = "LANDING"
+    FAILSAFE  = "FAILSAFE"   # power lost mid-flight — uncontrolled descent to impact
     COMPLETE  = "COMPLETE"
     ABORTED   = "ABORTED"
     CRASHED   = "CRASHED"
@@ -88,6 +90,8 @@ class FlightSimulator:
     SIM_HZ = 10           # physics update rate
     RECORD_HZ = 2         # telemetry snapshot rate (stored + emitted)
     WP_ACCEPT_M = 30.0    # waypoint acceptance radius in metres (wide for BVLOS speeds)
+    LANDING_ACCEPT_M = 8.0  # tighter radius for the final (landing-zone) waypoint —
+                             # hands off to the LANDING phase instead of teleporting alt to 0
     DEFAULT_SPEED = 50.0  # m/s — minimum BVLOS cruise speed
     MIN_SPEED = 50.0      # m/s — pilots cannot set below this
     MAX_SPEED_CAP = 80.0  # m/s — hard upper limit
@@ -228,6 +232,12 @@ class FlightSimulator:
 
     def land(self):
         with self._lock:
+            # Only meaningful while actually airborne — prevents a stray/duplicate
+            # Land click from re-triggering descent+disarm on an aircraft that has
+            # already landed (or hasn't launched, or has crashed).
+            if self._state not in (MissionState.TAKEOFF, MissionState.NAVIGATING,
+                                    MissionState.HOVERING, MissionState.RTL):
+                return
             self._state = MissionState.LANDING
             self.flight_mode = "LAND"
             self._log_event("LAND_COMMANDED")
@@ -304,6 +314,7 @@ class FlightSimulator:
         active_states = {
             MissionState.TAKEOFF, MissionState.NAVIGATING,
             MissionState.HOVERING, MissionState.RTL, MissionState.LANDING,
+            MissionState.FAILSAFE,
         }
         trainee_airborne = self._state in active_states and self.alt > 5.0
 
@@ -353,7 +364,10 @@ class FlightSimulator:
             self._step_hover(dt)
         elif s == MissionState.LANDING:
             self._step_land(dt)
+        elif s == MissionState.FAILSAFE:
+            self._step_failsafe(dt)
         self._update_battery(dt)
+        self._check_battery_depletion()
 
     # ---- phase handlers ----
 
@@ -393,16 +407,32 @@ class FlightSimulator:
         dist = haversine(self.lat, self.lon, wp_lat, wp_lon)
 
         # ---- Altitude control -----------------------------------------------
-        if is_final:
-            # 4° glide slope: ideal altitude at this distance is dist * tan(4°).
-            # If we're above the slope, descend at MAX_DESCENT to intercept it.
-            # Once on it, maintain the geometrically required sink rate.
+        if is_final and dist < self._APPROACH_DECEL_M:
+            # Final approach only: 4° glide slope — ideal altitude at this
+            # distance is dist * tan(4°).
+            #   - Above the slope: dive at MAX_DESCENT to intercept it.
+            #   - Below the slope: hold altitude (do NOT keep descending — a
+            #     typical cruise altitude is well under the ~84 m the glide
+            #     slope calls for at the 1200 m approach boundary, and blindly
+            #     applying the "on-slope" sink rate here would drive the
+            #     aircraft into the ground long before it reaches the pad).
+            #   - On the slope (within 3 m): follow it down at the
+            #     geometrically required sink rate.
             glide_target = dist * self._GLIDE_TAN
-            if self.alt > glide_target + 3.0:
-                vrate = -self.MAX_DESCENT          # dive to intercept slope
+            alt_err = glide_target - self.alt   # >0 = below slope, <0 = above slope
+            if alt_err < -3.0:
+                vrate = -self.MAX_DESCENT              # above slope — dive to intercept
+            elif alt_err > 3.0:
+                vrate = 0.0                            # below slope — hold and let it catch up
             else:
-                # On the slope: vrate = -groundspeed * tan(slope)
                 vrate = max(-self.MAX_DESCENT, -self._groundspeed * self._GLIDE_TAN)
+        elif is_final:
+            # Heading toward the landing waypoint but still outside final-approach
+            # range — hold cruise altitude. Without this, the glide-slope formula
+            # above (computed from a still-huge distance) would order a constant
+            # descent the instant the aircraft turns onto the final leg, pinning
+            # altitude at 0 long before it's anywhere near the landing zone.
+            vrate = 0.0
         else:
             alt_err = wp_alt - self.alt
             vrate = max(-self.MAX_DESCENT, min(self.MAX_CLIMB, alt_err * 0.5))
@@ -411,13 +441,31 @@ class FlightSimulator:
         self.alt = max(0.0, self.alt + vrate * dt)
 
         # ---- Waypoint reached -----------------------------------------------
-        if dist <= self.WP_ACCEPT_M:
-            self.alt = max(0.0, wp_alt)
-            self._vertical_rate = 0.0
+        # The landing zone uses a tighter acceptance radius: we hand off to the
+        # LANDING phase at whatever altitude the glide slope has actually
+        # achieved, instead of teleporting alt straight to 0 while still up to
+        # WP_ACCEPT_M (30 m) short and airborne. This is what makes the final
+        # descent actually descend, and lets disarm happen only once alt truly
+        # reaches the ground (see _step_land).
+        # For the final leg, also hand off to LANDING the moment the glide
+        # slope brings the aircraft down to ground level — even if there's a
+        # little lateral distance left. Otherwise, with the minimum approach
+        # speed floor, the aircraft would sit at alt=0 "flying" at 3 m/s for
+        # several more seconds before the lateral radius check catches up.
+        # _step_land takes over the final rollout/deceleration realistically.
+        accept_radius = self.LANDING_ACCEPT_M if is_final else self.WP_ACCEPT_M
+        grounded_on_final = is_final and self.alt <= 0.5
+        if dist <= accept_radius or grounded_on_final:
             self._log_event("WAYPOINT_REACHED", {"index": self._wp_idx})
             self._wp_idx += 1
-            if self._wp_idx >= len(self._waypoints):
+            if is_final:
+                self._vertical_rate = 0.0
                 self._state = MissionState.LANDING
+            else:
+                self.alt = max(0.0, wp_alt)
+                self._vertical_rate = 0.0
+                if self._wp_idx >= len(self._waypoints):
+                    self._state = MissionState.LANDING
             return
 
         # ---- Speed control --------------------------------------------------
@@ -521,14 +569,63 @@ class FlightSimulator:
             self._state = MissionState.COMPLETE
             self._log_event("LANDED")
 
+    # Terminal velocity for an unpowered multirotor (motors cut, high drag) —
+    # falls fast, but not instantaneously.
+    _FAILSAFE_TERMINAL_VS = -18.0
+    GRAVITY = 9.8
+
+    def _step_failsafe(self, dt: float):
+        """Battery depleted mid-flight: motors have cut out. The aircraft is no
+        longer under control — it falls under gravity (capped at a realistic
+        terminal velocity) while residual forward momentum bleeds off from drag,
+        and tumbles until it hits the ground."""
+        self._vertical_rate = max(self._vertical_rate - self.GRAVITY * dt, self._FAILSAFE_TERMINAL_VS)
+        self.alt = max(0.0, self.alt + self._vertical_rate * dt)
+
+        self._groundspeed = max(0.0, self._groundspeed - self.ACCEL * 0.5 * dt)
+        if self._groundspeed > 0.1:
+            self.lat, self.lon = move_along_bearing(
+                self.lat, self.lon, self._heading, self._groundspeed * dt
+            )
+
+        # Uncontrolled tumble — no autopilot holding attitude anymore
+        self._pitch = max(-45.0, min(45.0, self._pitch + random.uniform(-25, 25) * dt))
+        self._roll = max(-60.0, min(60.0, self._roll + random.uniform(-45, 45) * dt))
+
+        if self.alt <= 0.05:
+            self.alt = 0.0
+            self.armed = False
+            self.flight_mode = "CRASH"
+            self._groundspeed = 0.0
+            self._vertical_rate = 0.0
+            self._state = MissionState.CRASHED
+            self._collision_info = {
+                "cause": "battery_depletion",
+                "message": "Battery depleted in flight — power lost before reaching the landing zone.",
+            }
+            self._log_event("CRASHED", self._collision_info)
+
     # ---- battery ----
+
+    def _check_battery_depletion(self):
+        """If the battery reaches 0% while meaningfully airborne, the aircraft
+        loses power. This is the whole point of the battery model for BVLOS
+        training: a mission must be planned so the battery lasts the full
+        route — running it dry mid-flight is a crash, not a free pass."""
+        if (self.armed and self._bat_level <= 0.0 and self.alt > 2.0
+                and self._state not in (MissionState.FAILSAFE, MissionState.CRASHED)):
+            self._state = MissionState.FAILSAFE
+            self.flight_mode = "FAILSAFE"
+            self._log_event("BATTERY_DEPLETED", {"alt": round(self.alt, 1)})
 
     def _update_battery(self, dt: float):
         if not self.armed:
             self._bat_current = 0.0
             return
         s = self._state
-        if s in (MissionState.TAKEOFF,):
+        if s == MissionState.FAILSAFE:
+            draw = 0.0  # motors cut — no power draw once power is already lost
+        elif s in (MissionState.TAKEOFF,):
             draw = self.CLIMB_A
         elif s == MissionState.NAVIGATING and self._groundspeed > 5:
             draw = self.CRUISE_A

@@ -968,6 +968,8 @@ function playAlertBeep(freq) {
 // ============================================================
 socket.on("mission_complete", async t => {
   if (!sessionId) return;
+  // Aircraft is disarmed on the ground — flight controls no longer apply.
+  enableControls(false);
   try {
     const res = await fetch(`/api/session/${sessionId}/debrief`);
     const data = await res.json();
@@ -1172,11 +1174,14 @@ socket.on("aircraft_crashed", t => {
 
   const col = t.collision || {};
   document.getElementById("crashSubtitle").textContent =
-    col.callsign ? `Mid-Air Collision with ${col.callsign}` : "Mid-Air Collision";
+    col.cause === "battery_depletion" ? "Battery Depleted — Power Lost"
+    : col.callsign ? `Mid-Air Collision with ${col.callsign}` : "Mid-Air Collision";
   document.getElementById("crashDetail").textContent =
-    col.h_dist_m != null
-      ? `Horizontal separation: ${col.h_dist_m} m  ·  Vertical: ${col.v_dist_m} m`
-      : "";
+    col.cause === "battery_depletion"
+      ? (col.message || "Battery reached 0% before reaching the landing zone.")
+      : col.h_dist_m != null
+        ? `Horizontal separation: ${col.h_dist_m} m  ·  Vertical: ${col.v_dist_m} m`
+        : "";
 
   // Dramatic: shake the map div then show overlay
   const mapEl = document.getElementById("map");
